@@ -19,17 +19,16 @@ class UserForm(forms.ModelForm):
 class PostForm(forms.ModelForm):
     """
     Форма для создания и редактирования публикаций
-    Поля: из модели кроме author (он автоматически
-                            задается текущим логином пользователя),
-    Настройка отображения поля pub_date с помощью виджета DateInput
-                            для выбора даты и времени
+    Поля: из модели кроме author (он автоматически задается текущим логином пользователя)
+    Содержит поля для редактирования is_published и pub_date,
+    чтобы автор смог изменять публикацию: публиковать, откладывать, снимать с публикации
     """
 
     class Meta:
         model = Post
-        exclude = ('author',)
+        exclude = ('author', 'created_at',)
         widgets = {
-            'pub_date': forms.DateInput(attrs={'type': 'datetime-local'})
+            'pub_date': forms.DateTimeInput(attrs={'type': 'datetime-local'})
         }
 
 

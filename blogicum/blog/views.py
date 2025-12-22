@@ -2,10 +2,7 @@
 # Пагинатор на главную, страницу пользователя и страницу категории
 # Для реализации функций используем FBV, CBV, миксины
 
-from datetime import datetime
-
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.db.models import Count
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.views.generic import (
@@ -14,29 +11,11 @@ from django.views.generic import (
 
 from .models import Category, Comment, Post, User
 from .forms import CommentForm, PostForm, UserForm
+from .utils import published_only, add_comment_count, get_paginated_page
 
 PAGINATOR_POST = 10
 PAGINATOR_CATEGORY = 10
 PAGINATOR_PROFILE = 10
-
-
-def filtered_post(posts, is_count_comments=True):
-    """
-    Фильтрация публикаций по условиям:
-    - Опубликованные публикации.
-    - Дата публикации не превышает текущую.
-    - Категория публикации должна быть опубликована.
-    """
-    posts_query = posts.filter(
-        pub_date__lte=datetime.today(),
-        is_published=True,
-        category__is_published=True
-    ).order_by(
-        '-pub_date'
-    )
-    return posts_query.annotate(
-        comment_count=Count('comments')
-    ).order_by("-pub_date") if is_count_comments else posts_query
 
 
 class PostListView(ListView):
@@ -46,8 +25,10 @@ class PostListView(ListView):
     template_name = 'blog/index.html'
 
     def get_queryset(self):
-        """Получение списка публикаций с использованием фильтрации"""
-        return filtered_post(Post.objects.all())
+        """Получение списка публикаций с использованием фильтрации и подсчётом комментариев"""
+        return add_comment_count(Post.objects.select_related(
+            'category', 'location', 'author'
+        ))
 
 
 class PostDetailView(DetailView):
@@ -59,8 +40,7 @@ class PostDetailView(DetailView):
 
     def get_context_data(self, **kwargs):
         """
-        Дополнение контекста данными о комментариях и формой для добавления
-                                                                    комментариев
+        Дополнение контекста данными о комментариях и формой для добавления комментариев
         """
         return dict(
             **super().get_context_data(**kwargs),
@@ -71,19 +51,17 @@ class PostDetailView(DetailView):
     def get_object(self):
         """
         Получение объекта публикации с учётом её статуса публикации.
-        Автор видит даже неопубликованные публикации
+        Автор видит даже неопубликованные публикации.
+        Используется два вызова get_object_or_404:
+        1. Получить пост по ключу из полной таблицы
+        2. После проверки авторства - из набора опубликованных постов
         """
-        posts = Post.objects
-        return get_object_or_404(
-            posts.filter(
-                is_published=True
-            ) or posts.filter(
-                author=self.request.user
-            )
-            if self.request.user and self.request.user.is_authenticated
-            else filtered_post(Post.objects, is_count_comments=False),
-            pk=self.kwargs["post_id"],
-        )
+        post = get_object_or_404(Post, pk=self.kwargs['post_id'])
+
+        if self.request.user and self.request.user.is_authenticated and post.author == self.request.user:
+            return post
+
+        return get_object_or_404(published_only(Post.objects), pk=self.kwargs['post_id'])
 
 
 class PostCategoryView(ListView):
@@ -95,13 +73,15 @@ class PostCategoryView(ListView):
     paginate_by = PAGINATOR_CATEGORY
 
     def get_queryset(self):
-        """Получение публикаций, отфильтрованных по категории"""
+        """Получение публикаций, отфильтрованных по категории с подсчётом комментариев"""
         self.category = get_object_or_404(
             Category,
             slug=self.kwargs['category_slug'],
             is_published=True
         )
-        return filtered_post(self.category.posts.all())
+        return add_comment_count(self.category.posts.select_related(
+            'category', 'location', 'author'
+        ))
 
     def get_context_data(self, **kwargs):
         """Добавление информации о категории в контекст"""
@@ -199,8 +179,20 @@ class ProfileListView(ListView):
         return get_object_or_404(User, username=self.kwargs['username'])
 
     def get_queryset(self):
-        """Получение публикаций пользователя"""
-        return self.get_object().posts.all()
+        """
+        Получение публикаций пользователя.
+        Зависит от посетителя: автор видит все свои посты,
+        другие пользователи - только опубликованные.
+        """
+        author = self.get_object()
+        author_posts = author.posts.select_related(
+            'category', 'location', 'author'
+        )
+
+        if author != self.request.user:
+            return add_comment_count(author_posts, is_published=True)
+
+        return add_comment_count(author_posts, is_published=False)
 
     def get_context_data(self, **kwargs):
         """Добавление данных профиля в контекст"""
@@ -244,15 +236,15 @@ class CommentMixin(LoginRequiredMixin):
 
     def get_success_url(self):
         """Перенаправление на детали публикации после выполнения действия"""
-        return reverse('blog:post_detail', args=[self.kwargs['comment_id']])
+        return reverse('blog:post_detail',
+                       kwargs={'post_id': self.kwargs['post_id']})
 
     def dispatch(self, request, *args, **kwargs):
         """Проверка авторства комментария"""
-        coment = get_object_or_404(Comment, id=self.kwargs['comment_id'])
-        if coment.author != self.request.user:
+        comment = get_object_or_404(Comment, id=self.kwargs['comment_id'])
+        if comment.author != self.request.user:
             return redirect('blog:post_detail',
-                            post_id=self.kwargs['comment_id']
-                            )
+                            post_id=self.kwargs['post_id'])
         return super().dispatch(request, *args, **kwargs)
 
 
