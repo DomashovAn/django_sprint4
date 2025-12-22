@@ -3,6 +3,8 @@
 # Настраиваем обработчики для отображения страниц ошибок
 
 from django.contrib import admin
+from django.conf import settings
+from django.conf.urls.static import static
 from django.contrib.auth.forms import UserCreationForm
 from django.views.generic.edit import CreateView
 from django.urls import path, include, reverse_lazy
@@ -23,7 +25,8 @@ urlpatterns = [
     ),
 ]
 
-
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 # Обработчики ошибок
 handler404 = 'pages.views.page_not_found'
 handler500 = 'pages.views.server_error'
